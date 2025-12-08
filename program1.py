@@ -125,15 +125,14 @@ def process_sequences(seqList, kmax, useCanonical=False):
 
     return results
 
-if __name__ == "__main__":
 
-    seq = [("example", "AT", 2)]
-    kmax = 3
 
-    db, dictDb = buildMatrix("AT", kmax)
+seq = [("example", "AT", 2)]
+kmax = 3
 
-    print("\n### MAWs ###")
-    maws = findMAWS(dictDb, kmax, "AT")
-    for k in maws:
-        print(f"k = {k} : {maws[k]}")
+db, dictDb = buildMatrix("AT", kmax)
+print("\n### MAWs ###")
+maws = findMAWS(dictDb, kmax, "AT")
+for k in maws:
+    print(f"k = {k} : {maws[k]}")
 
