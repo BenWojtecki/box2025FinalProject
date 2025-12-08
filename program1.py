@@ -1,12 +1,13 @@
 from readfa import readfq
 from xopen import xopen
+import argparse
 import numpy as np
 
 
 
-def get_sequences(file_name):
+def get_sequences(fileName):
     sequences = []
-    with xopen(file_name) as fasta:
+    with xopen(fileName) as fasta:
         for name, seq, _ in readfq(fasta):
             sequences.append((name, seq, len(seq)))
     return sequences
@@ -27,7 +28,8 @@ def buildMatrix(seq, kmax):
     db = []
     dictDb = []
 
-    lx = ly = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+    lx = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+    ly = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
     dimX = dimY = 4
 
     for k in range(kmax):
@@ -38,11 +40,10 @@ def buildMatrix(seq, kmax):
             dictDb.append((matrix, lx, ly))
             continue 
 
-        # remplissage de la matrice
         for i in range(len(seq) - (k + 1)):
             w = seq[i:i + k + 2]  
-            h = w[:-1]   # préfixe
-            t = w[-1:]   # suffixe
+            h = w[:-1]  
+            t = w[-1:]
 
             if h in lx and t in ly:
                 matrix[lx[h], ly[t]] = 1
@@ -64,10 +65,24 @@ def buildMatrix(seq, kmax):
 def findMAWS(dictDb, kmax, seq):
     maws = {}
     present = {}
+    bases = ['A', 'C', 'G', 'T']
 
     # k == 1 alors les lettres présentes dans la séquence
+    kmersSeq = {}
+
+    for k in range(1, kmax + 1):
+        kmersSeq[k] = set()
+        if len(seq) >= k:
+            for i in range(0, len(seq) - k + 1):
+                kmer = seq[i:i + k]
+                kmersSeq[k].add(kmer)
+        else:
+            kmersSeq[k] = set()
+    
+    # Si k = 1
     present[1] = set(seq)
 
+    # Si k > 1
     for k in range(2, kmax + 1):
         if k - 1 < len(dictDb):
             _, lx, _ = dictDb[k - 1]
@@ -75,6 +90,7 @@ def findMAWS(dictDb, kmax, seq):
         else:
             present[k] = set()
 
+    # MAWs
     for k in range(1, kmax + 1):
         maw_set = set()
 
@@ -86,19 +102,21 @@ def findMAWS(dictDb, kmax, seq):
 
         else:
             all_prev = present[k - 1]
-            all_curr = present[k]
+            kmersReal = kmersSeq[k]
 
             for pref in all_prev:
-                for suff in all_prev:
-                    candidate = pref + suff[-1]
-
-                    if candidate in all_curr:
+                for b in bases:
+                    candidate = pref + b
+                    #Critère de sélection
+                    #Ne doit pas être dans la séquence
+                    if candidate in kmersReal:
                         continue
 
                     prefix = candidate[:-1]
                     suffix = candidate[1:]
 
-                    if prefix in all_prev and suffix in all_prev:
+                    # Facteurs présents dans la séquence
+                    if prefix in kmersSeq[k-1] and suffix in kmersSeq[k-1]:
                         maw_set.add(candidate)
 
         maws[k] = maw_set
@@ -109,30 +127,50 @@ def degCanonical(seq):
     rc = ''.join(comp[b] for b in reversed(seq))
     return min(seq, rc)
 
-def process_sequences(seqList, kmax, useCanonical=False):
+def process_sequences(seqs, kmax):
     results = {}
 
-    for name, seq, L in seqList:
-        print(f"Traitement de {name} ({L} bp)...")
+    for name, seq, L in seqs:
+        print(f"Traitement de {name} ...")
         _, dictDb = buildMatrix(seq, kmax)
         maws = findMAWS(dictDb, kmax, seq)
 
-        if useCanonical:
-            for k in maws:
-                maws[k] = {degCanonical(x) for x in maws[k]}
+        for k in maws:
+            maws[k] = {degCanonical(x) for x in maws[k]}
 
         results[name] = maws
 
     return results
 
+def writeTSV(results, outFile):
+    with open(outFile, "w") as f:
+        for seqName in sorted(results.keys()):
+            mawsK = results[seqName]
+        
+            for k in sorted(mawsK.keys()):
+                mawSet = mawsK[k]
+
+                if not mawSet:
+                    continue
+
+                sortedMaws = sorted(mawSet)
+                mawStr = ",".join(sortedMaws)
+
+                f.write(f"{seqName}\t{k}\t{mawStr}\n")
+
+def main():
+    parser = argparse.ArgumentParser(description="Program1")
+    parser.add_argument("fastaFile")
+    parser.add_argument("-k", "--kmax", type= int, required= True)
 
 
-seq = [("example", "AT", 2)]
-kmax = 3
+    args = parser.parse_args()
+    outFile = "results.tsv"
+    seqs = get_sequences(args.fastaFile)
+    results = process_sequences(seqs, args.kmax)
+    writeTSV(results, outFile)
 
-db, dictDb = buildMatrix("AT", kmax)
-print("\n### MAWs ###")
-maws = findMAWS(dictDb, kmax, "AT")
-for k in maws:
-    print(f"k = {k} : {maws[k]}")
 
+
+if __name__ == "__main__":
+    main()
