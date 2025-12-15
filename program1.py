@@ -122,8 +122,21 @@ def findMAWS(dictDb, kmax, seq):
         maws[k] = maw_set
     return maws
 
+# Gros poblème ici car dans le fichier all_ebi, nous avons de N et des M. D'après la doc du format .fa, le N représente une base non déterminé donc pas de soucis pour ça
+# Mais le symbole M est une ambiguité entre A ou C, peut être ajouter une lettre X qui représente les complémentaires de A ou C  donc G ou T mais pas sur de cette idée du tout
+# Symbole M : Ambiguité entre A ou C 
+# Symbole S : Ambiguité entre C ou G 
+# Symbole K : Ambiguité entre G ou T
+# Symbole W : Ambiguité entre A ou T 
+# Symbole R : Ambiguité entre A ou G
+# Symbole Y : Ambiguité entre C ou T
+# Symbole D : Ambiguité entre A, G ou T
+# Symbole H : Ambiguité entre A C T
+# Après avoir fait toutes les lettres, on peut faire un mappage classique sans se prendre la tête
+# N <-> N, M(A ou C) <-> K(G ou T), R(A ou G) <-> Y(C ou T), W(A ou T) <-> W(A ou T), S(C ou G) <-> S(C ou G), V(A,C,G) <-> B(T,C,G), D(A,G,T) <-> H(A,C,T)
+# Maintenant ça devrait tourner
 def degCanonical(seq):
-    comp = {'A':'T','T':'A','C':'G','G':'C'}
+    comp = {'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'}
     rc = ''.join(comp[b] for b in reversed(seq))
     return min(seq, rc)
 
@@ -165,7 +178,7 @@ def main():
 
 
     args = parser.parse_args()
-    outFile = "results.tsv"
+    outFile = "resultsProgram1.tsv"
     seqs = get_sequences(args.fastaFile)
     results = process_sequences(seqs, args.kmax)
     writeTSV(results, outFile)
