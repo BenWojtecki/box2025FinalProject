@@ -2,8 +2,10 @@ from readfa import readfq
 from xopen import xopen
 import argparse
 import numpy as np
+import time
 
 SIZEMATRIX = 50000
+COMP_TABLE = str.maketrans({'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'})
 
 
 def get_sequences(fileName):
@@ -34,7 +36,7 @@ def buildMatrix(seq, kmax):
     dimX = dimY = 4
 
     for k in range(kmax):
-        matrix = np.zeros((dimX, dimY))
+        matrix = np.zeros((dimX, dimY), dtype= np.int8) # Astuce de rat comme on aime 
 
         if len(seq) < k + 2:
             db.append(matrix)
@@ -51,13 +53,13 @@ def buildMatrix(seq, kmax):
             if h in lx and t in ly:
                 matrix[lx[h], ly[t]] = 1
 
+       
+        # matrice vide donc dictionnaires non mis à jour
+        if not matrix.any() == 0: # Plus rapide que np.nonzero normalement ^^
+            continue
+
         db.append(matrix)
         dictDb.append((matrix, lx, ly))
-
-        nonZeroCount = np.count_nonzero(matrix)
-        # matrice vide donc dictionnaires non mis à jour
-        if nonZeroCount == 0:
-            continue
 
         if dimX > SIZEMATRIX:
             print(f"Stop at k = {k+1} (matrix to big): {dimX} inputs")
@@ -76,21 +78,22 @@ def findMAWS(dictDb, kmax, seq):
     bases = ['A', 'C', 'G', 'T']
 
     # k == 1 alors les lettres présentes dans la séquence
+    seqLength = len(seq)
     kmersSeq = {}
 
     for k in range(1, kmax + 1):
         kmersSeq[k] = set()
-        if len(seq) >= k:
-            for i in range(0, len(seq) - k + 1):
-                kmer = seq[i:i + k]
-                kmersSeq[k].add(kmer)
-        else:
-            kmersSeq[k] = set()
-    
-    # Si k = 1
+
+    for i in range(seqLength):
+        word = ""
+        maxK = min(kmax, seqLength - i)
+        for k in range(1, maxK + 1):
+            word += seq[i + k - 1]
+            kmersSeq[k].add(word)
+
+
     present[1] = set(seq)
 
-    # Si k > 1
     for k in range(2, kmax + 1):
         if k - 1 < len(dictDb):
             _, lx, _ = dictDb[k - 1]
@@ -100,19 +103,20 @@ def findMAWS(dictDb, kmax, seq):
 
     # MAWs
     for k in range(1, kmax + 1):
+        if k > 1 and not present[k - 1]:
+            maws[k] = set()
+            continue
+
         maw_set = set()
 
         if k == 1:
-            alphabet = {"A", "C", "G", "T"}
-            for a in alphabet:
-                if a not in present[1]:
-                    maw_set.add(a)
+            maw_set = set(bases) - present[1]
 
         else:
-            all_prev = present[k - 1]
+            prevKmers = present[k - 1]
             kmersReal = kmersSeq[k]
 
-            for pref in all_prev:
+            for pref in prevKmers:
                 for b in bases:
                     candidate = pref + b
                     #Critère de sélection
@@ -144,8 +148,7 @@ def findMAWS(dictDb, kmax, seq):
 # N <-> N, M(A ou C) <-> K(G ou T), R(A ou G) <-> Y(C ou T), W(A ou T) <-> W(A ou T), S(C ou G) <-> S(C ou G), V(A,C,G) <-> B(T,C,G), D(A,G,T) <-> H(A,C,T)
 # Maintenant ça devrait tourner
 def degCanonical(seq):
-    comp = {'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'}
-    rc = ''.join(comp[b] for b in reversed(seq))
+    rc = seq.translate(COMP_TABLE)[::-1]
     return min(seq, rc)
 
 def process_sequences(seqs, kmax):
@@ -187,10 +190,12 @@ def main():
 
     args = parser.parse_args()
     outFile = "resultsProgram1.tsv"
+    start = time.perf_counter()
     seqs = get_sequences(args.fastaFile)
     results = process_sequences(seqs, args.kmax)
     writeTSV(results, outFile)
-
+    end = time.perf_counter()
+    print(f"Temps total : {end - start:.3f} seconds")
 
 
 if __name__ == "__main__":
