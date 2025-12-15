@@ -3,6 +3,7 @@ from xopen import xopen
 import argparse
 import numpy as np
 
+SIZEMATRIX = 50000
 
 
 def get_sequences(fileName):
@@ -40,7 +41,9 @@ def buildMatrix(seq, kmax):
             dictDb.append((matrix, lx, ly))
             continue 
 
-        for i in range(len(seq) - (k + 1)):
+        seqLength = len(seq)
+
+        for i in range(seqLength - (k + 1)):
             w = seq[i:i + k + 2]  
             h = w[:-1]  
             t = w[-1:]
@@ -51,9 +54,14 @@ def buildMatrix(seq, kmax):
         db.append(matrix)
         dictDb.append((matrix, lx, ly))
 
+        nonZeroCount = np.count_nonzero(matrix)
         # matrice vide donc dictionnaires non mis à jour
-        if np.count_nonzero(matrix) == 0:
+        if nonZeroCount == 0:
             continue
+
+        if dimX > SIZEMATRIX:
+            print(f"Stop at k = {k+1} (matrix to big): {dimX} inputs")
+            break
 
         # sinon mettre à jour 
         ly, dimY = to_dict(matrix, lx, ly)
