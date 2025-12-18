@@ -3,6 +3,7 @@ from xopen import xopen
 import argparse
 import numpy as np
 import time
+from multiprocessing import Pool, cpu_count
 
 SIZEMATRIX = 50000
 COMP_TABLE = str.maketrans({'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'})
@@ -25,6 +26,12 @@ def allKmers(seq, k):
     
     return kmers
 
+def precomputeKmers(seq, rcSeq, kmax):
+    kmers_by_k = {}
+    for k in range(1, kmax + 1):
+        kmers_by_k[k] = allKmers(seq, k) | allKmers(rcSeq, k)
+    return kmers_by_k
+
 # Symbole M : Ambiguité entre A ou C 
 # Symbole S : Ambiguité entre C ou G 
 # Symbole K : Ambiguité entre G ou T
@@ -38,77 +45,51 @@ def allKmers(seq, k):
 def degCanonical(seq):
     return seq.translate(COMP_TABLE)[::-1]
     
-def buildMatrix(seq, rcSeq, kmax):
+def buildMatrix(seq, rcSeq, kmax, kmerByK):
     dictDb = []
-    bases_present = set(seq) | set(rcSeq)
-    lx = {base: i for i, base in enumerate(sorted(bases_present))}
-    dimX = 4
+    combined = seq + rcSeq
+    lx = {base: i for i, base in enumerate(sorted(kmerByK[1]))}
+    dimX = len(lx)
 
     for k in range(1, kmax + 1):
         matrix = np.zeros((dimX, dimX), dtype= np.int8) # Astuce de rat
 
-        # Seq
-        if len(seq) >= k:
-            for i in range(len(seq) - k + 1):
-                pref = seq[i:i+k-1]
-                suff = seq[i+1:i+k]
+        # Combined
+        if len(combined) >= k:
+            for i in range(len(combined) - k + 1):
+                pref = combined[i:i+k-1]
+                suff = combined[i+1:i+k]
 
                 if pref in lx and suff in lx:
                     matrix[lx[pref], lx[suff]] = 1
 
-        # Reverse Complement Seq
-        if len(rcSeq) >= k:
-            for i in range(len(rcSeq) - k + 1):
-                pref = rcSeq[i:i+k-1]
-                suff = rcSeq[i+1:i+k]
-                if pref in lx and suff in lx:
-                    matrix[lx[pref], lx[suff]] = 1
-
-        dictDb.append((matrix, lx.copy()))
-        newLx = {}
-        cpt = 0
-
-        if len(seq) >= k:
-            for i in range(len(seq) - k + 1):
-                node = seq[i:i+k]
-                if node not in newLx:
-                    newLx[node] = cpt
-                    cpt += 1
-
-        if len(rcSeq) >= k:
-            for i in range(len(rcSeq) - k + 1):
-                node = rcSeq[i:i+k]
-                if node not in newLx:
-                    newLx[node] = cpt
-                    cpt += 1
-
-        lx = newLx
-        dimX = len(lx)
+        dictDb.append((matrix, lx))
         
-        if dimX > SIZEMATRIX:
-            print(f"Stop at k={k} (matrix too big: {dimX})")
-            break
+        if k < kmax:
+            lx = {kmer: i for i, kmer in enumerate(sorted(kmerByK[k+1]))}
+            dimX = len(lx)
+
+            if dimX > SIZEMATRIX:
+                print(f"Stop at k = {k + 1}\n")
+                break
 
     return dictDb
 
-def findMAWS(dictDb, kmax, seq, rc_seq):
+def findMAWS(dictDb, kmax, kmersByK):
     maws = {}
-    
-    # k = 1: lettres absentes dans seq ET rc_seq
-    lettersPresent = set(seq) | set(rc_seq)
-    maws[1] = set(BASES) - lettersPresent
+    maws[1] = set(BASES) - kmersByK[1]
     
     # k >= 2
-    for k in range(2, kmax + 1):
-        if k - 1 > len(dictDb):
-            maws[k] = set()
-            continue
-        
+    for k in range(2, min(kmax + 1, len(dictDb) + 1)):
+
         matrix, lx = dictDb[k-2]  
-        kmers_present = allKmers(seq, k) | allKmers(rc_seq, k)
+        kmers_present = kmersByK[k]
         mawK = set()
         
-        for pref in lx.keys():
+        lxSet = set(lx.keys())
+
+        for pref in lxSet:
+            i = lx[pref]
             for b in BASES:
                 candidate = pref + b
                 suffix = candidate[1:]
@@ -116,25 +97,45 @@ def findMAWS(dictDb, kmax, seq, rc_seq):
                 if candidate in kmers_present:
                     continue
                 
-                if pref not in lx or suffix not in lx:
+                if pref not in lxSet or suffix not in lxSet:
                     continue
 
-                if matrix[lx[pref], lx[suffix]] == 0:
+                if matrix[i, lx[suffix]] == 0:
                     mawK.add(candidate)
         
         maws[k] = mawK
     return maws
 
-def processSequences(seqs, kmax):
-    results = {}
-
-    for name, seq, _ in seqs:
-        print(f"Traitement de {name} ...")
-
-        rcSeq = degCanonical(seq)
-        dictDb = buildMatrix(seq, rcSeq, kmax)
-        results[name] = findMAWS(dictDb, kmax, seq, rcSeq)
+def processOneSequence(args):
+    name, seq, kmax = args
     
+    print(f"Traitement de {name} ...")
+    
+    rcSeq = degCanonical(seq)
+    kmersByK = precomputeKmers(seq, rcSeq, kmax)
+    dictDb = buildMatrix(seq, rcSeq, kmax, kmersByK)
+    maws = findMAWS(dictDb, kmax, kmersByK)
+    
+    return (name, maws)
+
+def processSequences(seqs, kmax, numProcesses=None):
+    if numProcesses is None:
+        numProcesses = cpu_count()
+    
+    print(f"Utilisation de {numProcesses} processus pour {len(seqs)} séquence(s)")
+    args_list = [(name, seq, kmax) for name, seq, _ in seqs]
+    
+    if len(seqs) == 1 or numProcesses == 1:
+        # Pas besoin de parallélisation
+        results = {}
+        for args in args_list:
+            name, maws = processOneSequence(args)
+            results[name] = maws
+    else:
+        with Pool(processes=numProcesses) as pool:
+            result_list = pool.map(processOneSequence, args_list)
+        
+        results = {name: maws for name, maws in result_list}
     return results
 
 def writeTSV(results, outFile):
@@ -150,12 +151,14 @@ def main():
     parser = argparse.ArgumentParser(description="MAW Detection Program")
     parser.add_argument("fastaFile")
     parser.add_argument("-k", "--kmax", type=int, required=True)
+    parser.add_argument("-p", "--processes", type=int, default=None, 
+                        help=f"Number of parallel processes (default: {cpu_count()})")
     args = parser.parse_args()
     
     start = time.perf_counter()
     
     seqs = get_sequences(args.fastaFile)
-    results = processSequences(seqs, kmax=args.kmax)
+    results = processSequences(seqs, kmax=args.kmax, numProcesses=args.processes)
     writeTSV(results, "resultsProgram1.tsv")
     
     end = time.perf_counter()
