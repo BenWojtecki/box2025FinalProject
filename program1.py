@@ -3,10 +3,11 @@ from xopen import xopen
 import argparse
 import numpy as np
 import time
+from multiprocessing import Pool, cpu_count
 
 SIZEMATRIX = 50000
 COMP_TABLE = str.maketrans({'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'})
-
+BASES = ['A', 'C', 'G', 'T']
 
 def get_sequences(fileName):
     sequences = []
@@ -15,127 +16,22 @@ def get_sequences(fileName):
             sequences.append((name, seq, len(seq)))
     return sequences
 
-def to_dict(matrix, lx, ly):
-    newDict = {}
-    cpt = 0
+def allKmers(seq, k):
+    if len(seq) < k:
+        return set()
+    
+    kmers = set()
+    for i in range(len(seq) - k + 1):
+        kmers.add(seq[i:i+k])
+    
+    return kmers
 
-    for pref, i in lx.items():
-        for suff, j in ly.items():
-            if matrix[i, j] == 1:
-                newDict[pref + suff] = cpt
-                cpt += 1
-
-    return newDict, cpt
-
-def buildMatrix(seq, kmax):
-    db = []
-    dictDb = []
-
-    lx = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
-    ly = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
-    dimX = dimY = 4
-
-    for k in range(kmax):
-        matrix = np.zeros((dimX, dimY), dtype= np.int8) # Astuce de rat comme on aime 
-
-        if len(seq) < k + 2:
-            db.append(matrix)
-            dictDb.append((matrix, lx, ly))
-            continue 
-
-        seqLength = len(seq)
-
-        for i in range(seqLength - (k + 1)):
-            w = seq[i:i + k + 2]  
-            h = w[:-1]  
-            t = w[-1:]
-
-            if h in lx and t in ly:
-                matrix[lx[h], ly[t]] = 1
-
-       
-        # matrice vide donc dictionnaires non mis à jour
-        if not matrix.any() == 0: # Plus rapide que np.nonzero normalement ^^
-            continue
-
-        db.append(matrix)
-        dictDb.append((matrix, lx, ly))
-
-        if dimX > SIZEMATRIX:
-            print(f"Stop at k = {k+1} (matrix to big): {dimX} inputs")
-            break
-
-        # sinon mettre à jour 
-        ly, dimY = to_dict(matrix, lx, ly)
-        lx = ly
-        dimX = dimY
-
-    return db, dictDb
-
-def findMAWS(dictDb, kmax, seq):
-    maws = {}
-    present = {}
-    bases = ['A', 'C', 'G', 'T']
-
-    # k == 1 alors les lettres présentes dans la séquence
-    seqLength = len(seq)
-    kmersSeq = {}
-
+def precomputeKmers(seq, rcSeq, kmax):
+    kmers_by_k = {}
     for k in range(1, kmax + 1):
-        kmersSeq[k] = set()
+        kmers_by_k[k] = allKmers(seq, k) | allKmers(rcSeq, k)
+    return kmers_by_k
 
-    for i in range(seqLength):
-        word = ""
-        maxK = min(kmax, seqLength - i)
-        for k in range(1, maxK + 1):
-            word += seq[i + k - 1]
-            kmersSeq[k].add(word)
-
-
-    present[1] = set(seq)
-
-    for k in range(2, kmax + 1):
-        if k - 1 < len(dictDb):
-            _, lx, _ = dictDb[k - 1]
-            present[k] = set(lx.keys())
-        else:
-            present[k] = set()
-
-    # MAWs
-    for k in range(1, kmax + 1):
-        if k > 1 and not present[k - 1]:
-            maws[k] = set()
-            continue
-
-        maw_set = set()
-
-        if k == 1:
-            maw_set = set(bases) - present[1]
-
-        else:
-            prevKmers = present[k - 1]
-            kmersReal = kmersSeq[k]
-
-            for pref in prevKmers:
-                for b in bases:
-                    candidate = pref + b
-                    #Critère de sélection
-                    #Ne doit pas être dans la séquence
-                    if candidate in kmersReal:
-                        continue
-
-                    prefix = candidate[:-1]
-                    suffix = candidate[1:]
-
-                    # Facteurs présents dans la séquence
-                    if prefix in kmersSeq[k-1] and suffix in kmersSeq[k-1]:
-                        maw_set.add(candidate)
-
-        maws[k] = maw_set
-    return maws
-
-# Gros poblème ici car dans le fichier all_ebi, nous avons de N et des M. D'après la doc du format .fa, le N représente une base non déterminé donc pas de soucis pour ça
-# Mais le symbole M est une ambiguité entre A ou C, peut être ajouter une lettre X qui représente les complémentaires de A ou C  donc G ou T mais pas sur de cette idée du tout
 # Symbole M : Ambiguité entre A ou C 
 # Symbole S : Ambiguité entre C ou G 
 # Symbole K : Ambiguité entre G ou T
@@ -146,57 +42,127 @@ def findMAWS(dictDb, kmax, seq):
 # Symbole H : Ambiguité entre A C T
 # Après avoir fait toutes les lettres, on peut faire un mappage classique sans se prendre la tête
 # N <-> N, M(A ou C) <-> K(G ou T), R(A ou G) <-> Y(C ou T), W(A ou T) <-> W(A ou T), S(C ou G) <-> S(C ou G), V(A,C,G) <-> B(T,C,G), D(A,G,T) <-> H(A,C,T)
-# Maintenant ça devrait tourner
 def degCanonical(seq):
-    rc = seq.translate(COMP_TABLE)[::-1]
-    return min(seq, rc)
+    return seq.translate(COMP_TABLE)[::-1]
+    
+def buildMatrix(seq, rcSeq, kmax, kmerByK):
+    dictDb = []
+    combined = seq + rcSeq
+    lx = {base: i for i, base in enumerate(sorted(kmerByK[1]))}
+    dimX = len(lx)
 
-def process_sequences(seqs, kmax):
-    results = {}
+    for k in range(1, kmax + 1):
+        matrix = np.zeros((dimX, dimX), dtype= np.int8) # Astuce de rat
 
-    for name, seq, L in seqs:
-        print(f"Traitement de {name} ...")
-        _, dictDb = buildMatrix(seq, kmax)
-        maws = findMAWS(dictDb, kmax, seq)
+        # Combined
+        if len(combined) >= k:
+            for i in range(len(combined) - k + 1):
+                pref = combined[i:i+k-1]
+                suff = combined[i+1:i+k]
 
-        for k in maws:
-            maws[k] = {degCanonical(x) for x in maws[k]}
+                if pref in lx and suff in lx:
+                    matrix[lx[pref], lx[suff]] = 1
 
-        results[name] = maws
+        dictDb.append((matrix, lx))
+        
+        if k < kmax:
+            lx = {kmer: i for i, kmer in enumerate(sorted(kmerByK[k+1]))}
+            dimX = len(lx)
 
+            if dimX > SIZEMATRIX:
+                print(f"Stop at k = {k + 1}\n")
+                break
+
+    return dictDb
+
+def findMAWS(dictDb, kmax, kmersByK):
+    maws = {}
+    maws[1] = set(BASES) - kmersByK[1]
+    
+    # k >= 2
+    for k in range(2, min(kmax + 1, len(dictDb) + 1)):
+
+        matrix, lx = dictDb[k-2]  
+        kmers_present = kmersByK[k]
+        mawK = set()
+        
+        lxSet = set(lx.keys())
+
+        for pref in lxSet:
+            i = lx[pref]
+            for b in BASES:
+                candidate = pref + b
+                suffix = candidate[1:]
+                
+                if candidate in kmers_present:
+                    continue
+                
+                if pref not in lxSet or suffix not in lxSet:
+                    continue
+
+                if matrix[i, lx[suffix]] == 0:
+                    mawK.add(candidate)
+        
+        maws[k] = mawK
+    return maws
+
+def processOneSequence(args):
+    name, seq, kmax = args
+    
+    print(f"Traitement de {name} ...")
+    
+    rcSeq = degCanonical(seq)
+    kmersByK = precomputeKmers(seq, rcSeq, kmax)
+    dictDb = buildMatrix(seq, rcSeq, kmax, kmersByK)
+    maws = findMAWS(dictDb, kmax, kmersByK)
+    
+    return (name, maws)
+
+def processSequences(seqs, kmax, numProcesses=None):
+    if numProcesses is None:
+        numProcesses = cpu_count()
+    
+    print(f"Utilisation de {numProcesses} processus pour {len(seqs)} séquence(s)")
+    args_list = [(name, seq, kmax) for name, seq, _ in seqs]
+    
+    if len(seqs) == 1 or numProcesses == 1:
+        # Pas besoin de parallélisation
+        results = {}
+        for args in args_list:
+            name, maws = processOneSequence(args)
+            results[name] = maws
+    else:
+        with Pool(processes=numProcesses) as pool:
+            result_list = pool.map(processOneSequence, args_list)
+        
+        results = {name: maws for name, maws in result_list}
     return results
 
 def writeTSV(results, outFile):
     with open(outFile, "w") as f:
-        for seqName in sorted(results.keys()):
-            mawsK = results[seqName]
-        
-            for k in sorted(mawsK.keys()):
-                mawSet = mawsK[k]
-
+        for seqName in sorted(results):
+            for k in sorted(results[seqName]):
+                mawSet = results[seqName][k]
                 if not mawSet:
                     continue
-
-                sortedMaws = sorted(mawSet)
-                mawStr = ",".join(sortedMaws)
-
-                f.write(f"{seqName}\t{k}\t{mawStr}\n")
+                f.write(f"{seqName}\t{k}\t{','.join(sorted(mawSet))}\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Program1")
+    parser = argparse.ArgumentParser(description="MAW Detection Program")
     parser.add_argument("fastaFile")
-    parser.add_argument("-k", "--kmax", type= int, required= True)
-
-
+    parser.add_argument("-k", "--kmax", type=int, required=True)
+    parser.add_argument("-p", "--processes", type=int, default=None, 
+                        help=f"Number of parallel processes (default: {cpu_count()})")
     args = parser.parse_args()
-    outFile = "resultsProgram1.tsv"
+    
     start = time.perf_counter()
+    
     seqs = get_sequences(args.fastaFile)
-    results = process_sequences(seqs, args.kmax)
-    writeTSV(results, outFile)
+    results = processSequences(seqs, kmax=args.kmax, numProcesses=args.processes)
+    writeTSV(results, "resultsProgram1.tsv")
+    
     end = time.perf_counter()
     print(f"Temps total : {end - start:.3f} seconds")
-
 
 if __name__ == "__main__":
     main()
