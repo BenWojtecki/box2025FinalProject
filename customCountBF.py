@@ -6,11 +6,11 @@ import random as rand
 from time import time
 
 class countBF():
-    def __init__(self,x,y,eta,k):
+    def __init__(self,k,x,y,eta = 8, threshold = 0):
         """
         x,y is the shape of the array
         eta is the number of counters in a single cell
-        x, eta and y should be pairwise coprime
+        x, y should be pairwise coprime, taking two prime numbers is an easy way to go
         k is the number of hash function used.
         """
         rand.seed(time())
@@ -20,7 +20,7 @@ class countBF():
         self._y = y 
         self._eta = eta 
         self._k = k
-
+        self._threshold = threshold
         self._powers = None
         self._compute_powers()
 
@@ -58,7 +58,7 @@ class countBF():
                 mini_value =read
         return mini_value
 
-    def checkinsert(self,kmer,threshold):
+    def checkinsert(self,kmer):
         mini_value = float("inf")
         for i in range(self._k):
             h = mmh3.hash(kmer,seed = self._seeds[i], signed = False)
@@ -68,5 +68,5 @@ class countBF():
             read  =  self._masks(self.bloomFilter[i][j],l)
             if  read<mini_value:
                 mini_value =read
-        return mini_value>=threshold 
+        return mini_value>=self._threshold 
             
