@@ -6,7 +6,7 @@ import random as rand
 from time import time
 
 class countBF():
-    def __init__(self,k,x,y,eta = 8, threshold = 0):
+    def __init__(self,k,x,y,eta = 10, threshold = 0):
         """
         x,y is the shape of the array
         eta is the number of counters in a single cell
@@ -23,6 +23,9 @@ class countBF():
         self._threshold = threshold
         self._powers = None
         self._compute_powers()
+        
+        self._counter_max = [p*threshold for p in self._powers]
+
 
         self._seeds = [ int(rand.randbytes(4).hex(),16) for _ in range(self._k)]
         self._masks = lambda x,i : (x//self._powers[i])%self._powers[1]
@@ -58,7 +61,14 @@ class countBF():
                 mini_value =read
         return mini_value
 
+    def delete(self,kmer):
+        for i in range(self._k):
+            h = mmh3.hash(kmer,seed = self._seeds[i], signed = False)
+            i,j,l = h%self._x,h%self._y,h%self._eta
+            self.bloomFilter[i][j] -= self._counter_max[l]        
+
     def checkinsert(self,kmer):
+        res =[False,False]
         mini_value = float("inf")
         for i in range(self._k):
             h = mmh3.hash(kmer,seed = self._seeds[i], signed = False)
@@ -68,5 +78,12 @@ class countBF():
             read  =  self._masks(self.bloomFilter[i][j],l)
             if  read<mini_value:
                 mini_value =read
-        return mini_value>=self._threshold 
-            
+
+        if mini_value>=self._threshold:
+            res[0] = True
+            res[1] = mini_value>self._threshold
+            # print(mini_value,self._threshold)
+            # print(res)
+            self.delete(kmer)
+
+        return res
