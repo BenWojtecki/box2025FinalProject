@@ -30,14 +30,12 @@ def encodeKmersStream(seq, k):
         if valid >= k:
             yield val
 
-
 def rcBin(x, k):
     rc = 0
     for _ in range(k):
         rc = (rc << 2) | (3 - (x & 3))
         x >>= 2
     return rc
-
 
 def decode(x, k):
     out = []
@@ -46,18 +44,13 @@ def decode(x, k):
         x >>= 2
     return ''.join(reversed(out))
 
-
 def get_sequences(fileName):
     with xopen(fileName) as fasta:
         for name, seq, _ in readfq(fasta):
             yield name, seq
 
+def findMawsStream(seq, kmax):
 
-def findMaws_stream(seq, kmax):
-    """
-    Générateur :
-    yield (k, [list of MAWs])
-    """
     prevPresent = set()
 
     for k in range(1, kmax + 1):
@@ -92,10 +85,7 @@ def findMaws_stream(seq, kmax):
                 suffix = x & maskSuffix
 
                 # Condition 2 : minimalité
-                if (
-                    suffix in prevPresent or
-                    rcBin(suffix, k - 1) in prevPresent
-                ):
+                if (suffix in prevPresent or rcBin(suffix, k - 1) in prevPresent):
                     xcanon = min(x, rcBin(x, k))
                     mawK.add(xcanon)
 
@@ -103,7 +93,6 @@ def findMaws_stream(seq, kmax):
             yield k, sorted(decode(x, k) for x in mawK)
 
         prevPresent = present
-
 
 def main():
     parser = argparse.ArgumentParser(description="Minimal Absent Words (Program 1, streaming)")
@@ -118,12 +107,11 @@ def main():
         for name, seq in get_sequences(args.fastaFile):
             print(f"Processing {name}")
 
-            for k, maws in findMaws_stream(seq, args.k):
+            for k, maws in findMawsStream(seq, args.k):
                 out.write(f"{name}\t{k}\t{','.join(maws)}\n")
 
     end = time.perf_counter()
     print(f"Total time: {end - start:.3f} seconds")
-
 
 if __name__ == "__main__":
     main()
