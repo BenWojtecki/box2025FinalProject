@@ -25,8 +25,8 @@ def naive(fileName, kmax, threshold):
 def initCountBF(n,threshold,err):
 
     m = ceil(-(n*log(err))/pow(log(2),2))
-    k = floor((m/n)*log(2))
-    tmp = sqrt(m//256)# From KmerCo
+    k = floor((m/n)*pow(log(2),3))
+    tmp = sqrt(m/256)# From KmerCo
     i = 0
     while prime.prime_numbers[i] <= tmp:
         i+=1
@@ -60,7 +60,7 @@ def CountBFFromTSV(fileName,n, kmax, threshold = 0,err = 0.01):
                     #print("===",m,a.query(m))
                 if b2 : 
                     falsePositives +=1
-    #print(f"FP:{falsePositives}")
+    print(f"FP:{falsePositives}")
     return results
 
 def setListToTSV(outFile,kmax,setlist):
