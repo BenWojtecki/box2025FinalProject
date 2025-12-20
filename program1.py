@@ -117,11 +117,11 @@ def findMawsStream(seq, kmax):
             prevKmers = []
             for i in range(maxPrev):
                 if prevPresent[i >> 3] & (1 << (i & 7)):
-                    prev_kmers.append(i)
+                    prevKmers.append(i)
         else:
-            prev_kmers = prevPresent
+            prevKmers = prevPresent
         
-        for prefix in prev_kmers:
+        for prefix in prevKmers:
             for b in BASES:
                 x = (prefix << 2) | b
                 
@@ -149,6 +149,7 @@ def main():
     args = parser.parse_args()
     
     start = time.perf_counter()
+    totalMaws = 0
     
     with open(args.o, "w") as out:
         for name, seq in getSequences(args.fastaFile):
@@ -156,9 +157,11 @@ def main():
             
             for k, maws in findMawsStream(seq, args.k):
                 out.write(f"{name}\t{k}\t{','.join(maws)}\n")
+                totalMaws += (len(maws))
                 out.flush()
                 
     end = time.perf_counter()
+    print(f"\nTotal number of MAWs: {totalMaws}")
     print(f"\nTotal time: {end - start:.3f} seconds")
 
 if __name__ == "__main__":
