@@ -1,138 +1,129 @@
+"""
+Program 1 - Minimal Absent Words (MAWs)
+Streaming version (write TSV on the fly, per k)
+"""
+
 from readfa import readfq
 from xopen import xopen
 import argparse
-import numpy as np
 import time
 
-COMP_TABLE = str.maketrans({'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'})
-BASES = ['A', 'C', 'G', 'T']
+ENC = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+DEC = ['A', 'C', 'G', 'T']
+BASES = range(4)
+
+
+def encodeKmersStream(seq, k):
+    if len(seq) < k:
+        return
+    mask = (1 << (2 * k)) - 1
+    val = 0
+    valid = 0
+
+    for c in seq:
+        if c not in ENC:
+            val = 0
+            valid = 0
+            continue
+        val = ((val << 2) | ENC[c]) & mask
+        valid += 1
+        if valid >= k:
+            yield val
+
+
+def rcBin(x, k):
+    rc = 0
+    for _ in range(k):
+        rc = (rc << 2) | (3 - (x & 3))
+        x >>= 2
+    return rc
+
+
+def decode(x, k):
+    out = []
+    for _ in range(k):
+        out.append(DEC[x & 3])
+        x >>= 2
+    return ''.join(reversed(out))
+
 
 def get_sequences(fileName):
-    sequences = []
     with xopen(fileName) as fasta:
         for name, seq, _ in readfq(fasta):
-            sequences.append((name, seq))
-    return sequences
+            yield name, seq
 
-def allKmers(seq, k):
-    if len(seq) < k:
-        return set()
-    
-    kmers = set()
-    for i in range(len(seq) - k + 1):
-        kmers.add(seq[i:i+k])
-    
-    return kmers
 
-def precomputeKmers(seq, rcSeq, kmax):
-    kmersByK = {}
+def findMaws_stream(seq, kmax):
+    """
+    Générateur :
+    yield (k, [list of MAWs])
+    """
+    prevPresent = set()
+
     for k in range(1, kmax + 1):
-        kmersByK[k] = allKmers(seq, k) | allKmers(rcSeq, k)
-    return kmersByK
+        present = set(encodeKmersStream(seq, k))
 
-# Symbole M : Ambiguité entre A ou C 
-# Symbole S : Ambiguité entre C ou G 
-# Symbole K : Ambiguité entre G ou T
-# Symbole W : Ambiguité entre A ou T 
-# Symbole R : Ambiguité entre A ou G
-# Symbole Y : Ambiguité entre C ou T
-# Symbole D : Ambiguité entre A, G ou T
-# Symbole H : Ambiguité entre A C T
-# Après avoir fait toutes les lettres, on peut faire un mappage classique sans se prendre la tête
-# N <-> N, M(A ou C) <-> K(G ou T), R(A ou G) <-> Y(C ou T), W(A ou T) <-> W(A ou T), S(C ou G) <-> S(C ou G), V(A,C,G) <-> B(T,C,G), D(A,G,T) <-> H(A,C,T)
-def degCanonical(seq):
-    return seq.translate(COMP_TABLE)[::-1]
-    
-def buildTransitions(seq, rcSeq, kmax):
-    transitionsByK = {}
-    sequences = (seq, rcSeq)
+        # k = 1
+        if k == 1:
+            maws = []
+            for b in BASES:
+                if b not in present:
+                    maws.append(decode(b, 1))
+            if maws:
+                yield 1, maws
+            prevPresent = present
+            continue
 
-    for k in range(2, kmax + 1):
-        trans = {}
+        if not prevPresent:
+            prevPresent = present
+            continue
 
-        for s in sequences:
-            if len(s) < k:
-                continue
-
-            for i in range(len(s) - k + 1):
-                pref = s[i:i+k-1]
-                suff = s[i+1:i+k]
-
-                if pref in trans:
-                    trans[pref].add(suff)
-                else:
-                    trans[pref] = {suff}
-
-        transitionsByK[k] = trans
-    return transitionsByK
-
-def findMAWS(transitions_by_k, kmersByK, kmax):
-    maws = {}
-    
-    # k = 1
-    maws[1] = set(BASES) - kmersByK[1]
-
-    # k = 2
-    for k in range(2, kmax + 1):
-        trans = transitions_by_k[k]
-        kmersPresent = kmersByK[k]
-        kmersPrev = kmersByK[k-1]
-
+        maskSuffix = (1 << (2 * (k - 1))) - 1
         mawK = set()
 
-        for pref in kmersPrev:
+        for prefix in prevPresent:
             for b in BASES:
-                candidate = pref + b
-                suff = candidate[1:]
+                x = (prefix << 2) | b
 
-                if candidate in kmersPresent:
-                    continue
-                if suff not in kmersPrev:
+                # Condition 1 : absent
+                if x in present:
                     continue
 
-                if pref not in trans or suff not in trans[pref]:
-                    mawK.add(candidate)
+                suffix = x & maskSuffix
 
-        maws[k] = mawK
-    return maws
+                # Condition 2 : minimalité
+                if (
+                    suffix in prevPresent or
+                    rcBin(suffix, k - 1) in prevPresent
+                ):
+                    xcanon = min(x, rcBin(x, k))
+                    mawK.add(xcanon)
 
-def processSequences(seqs, kmax):
-    results = {}
+        if mawK:
+            yield k, sorted(decode(x, k) for x in mawK)
 
-    for name, seq in seqs:
-        print(f"Traitement de {name} ...")
+        prevPresent = present
 
-        rcSeq = degCanonical(seq)
-        kmersByK = precomputeKmers(seq, rcSeq, kmax)
-        transitions = buildTransitions(seq, rcSeq, kmax)
-        results[name] = findMAWS(transitions, kmersByK, kmax)
-
-    return results
-
-
-def writeTSV(results, outFile):
-    with open(outFile, "w") as f:
-        for seqName in sorted(results):
-            for k in sorted(results[seqName]):
-                mawSet = results[seqName][k]
-                if not mawSet:
-                    continue
-                f.write(f"{seqName}\t{k}\t{','.join(sorted(mawSet))}\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="MAW Detection Program")
+    parser = argparse.ArgumentParser(description="Minimal Absent Words (Program 1, streaming)")
     parser.add_argument("fastaFile")
-    parser.add_argument("-k", "--kmax", type=int, required=True)
+    parser.add_argument("-k", type=int, required=True)
+    parser.add_argument("-o", default="resultsProgram1.tsv")
     args = parser.parse_args()
-    
+
     start = time.perf_counter()
-    
-    seqs = get_sequences(args.fastaFile)
-    results = processSequences(seqs, kmax=args.kmax)
-    writeTSV(results, "resultsProgram1.tsv")
-    
+
+    with open(args.o, "w") as out:
+        for name, seq in get_sequences(args.fastaFile):
+            print(f"Processing {name}")
+
+            for k, maws in findMaws_stream(seq, args.k):
+                out.write(f"{name}\t{k}\t{','.join(maws)}\n")
+
     end = time.perf_counter()
-    print(f"Temps total : {end - start:.3f} seconds")
+    print(f"Total time: {end - start:.3f} seconds")
+
 
 if __name__ == "__main__":
     main()
