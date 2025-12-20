@@ -1,138 +1,165 @@
+"""
+Program 1 - Minimal Absent Words (MAWs)
+
+Definition of MAWs
+1) x is absent iff x not in S
+2) for every strict substring w of x:
+      w in S OR rc(w) in S
+"""
+
 from readfa import readfq
 from xopen import xopen
 import argparse
-import numpy as np
 import time
+from array import array
 
-COMP_TABLE = str.maketrans({'A':'T','T':'A','C':'G','G':'C', 'N':'N', 'M': 'K', 'K' : 'M', 'R':'Y', 'Y':'R', 'W': 'W', 'S' : 'S', 'V' : 'B', 'B':'V', 'D':'H', 'H':'D'})
-BASES = ['A', 'C', 'G', 'T']
+ENC = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+DEC = ['A', 'C', 'G', 'T']
+BASES = range(4)
 
-def get_sequences(fileName):
-    sequences = []
+def encodeKmersStream(seq, k):
+    if len(seq) < k:
+        return
+    mask = (1 << (2 * k)) - 1
+    val = 0
+    valid = 0
+    
+    for c in seq:
+        encVal = ENC.get(c, -1)
+        if encVal == -1:
+            val = 0
+            valid = 0
+            continue
+        val = ((val << 2) | encVal) & mask
+        valid += 1
+        if valid >= k:
+            yield val
+
+def rcBin(x, k):
+    rc = 0
+    for _ in range(k):
+        rc = (rc << 2) | (3 - (x & 3))
+        x >>= 2
+    return rc
+
+def decode(x, k):
+    out = []
+    for _ in range(k):
+        out.append(DEC[x & 3])
+        x >>= 2
+    return ''.join(reversed(out))
+
+def getSequences(fileName):
     with xopen(fileName) as fasta:
         for name, seq, _ in readfq(fasta):
-            sequences.append((name, seq))
-    return sequences
+            yield name, seq.upper()
 
-def allKmers(seq, k):
-    if len(seq) < k:
-        return set()
+def findMawsStream(seq, kmax):
+    prevPresent = None
+    prevBitArray = None
     
-    kmers = set()
-    for i in range(len(seq) - k + 1):
-        kmers.add(seq[i:i+k])
-    
-    return kmers
-
-def precomputeKmers(seq, rcSeq, kmax):
-    kmersByK = {}
     for k in range(1, kmax + 1):
-        kmersByK[k] = allKmers(seq, k) | allKmers(rcSeq, k)
-    return kmersByK
-
-# Symbole M : Ambiguité entre A ou C 
-# Symbole S : Ambiguité entre C ou G 
-# Symbole K : Ambiguité entre G ou T
-# Symbole W : Ambiguité entre A ou T 
-# Symbole R : Ambiguité entre A ou G
-# Symbole Y : Ambiguité entre C ou T
-# Symbole D : Ambiguité entre A, G ou T
-# Symbole H : Ambiguité entre A C T
-# Après avoir fait toutes les lettres, on peut faire un mappage classique sans se prendre la tête
-# N <-> N, M(A ou C) <-> K(G ou T), R(A ou G) <-> Y(C ou T), W(A ou T) <-> W(A ou T), S(C ou G) <-> S(C ou G), V(A,C,G) <-> B(T,C,G), D(A,G,T) <-> H(A,C,T)
-def degCanonical(seq):
-    return seq.translate(COMP_TABLE)[::-1]
-    
-def buildTransitions(seq, rcSeq, kmax):
-    transitionsByK = {}
-    sequences = (seq, rcSeq)
-
-    for k in range(2, kmax + 1):
-        trans = {}
-
-        for s in sequences:
-            if len(s) < k:
-                continue
-
-            for i in range(len(s) - k + 1):
-                pref = s[i:i+k-1]
-                suff = s[i+1:i+k]
-
-                if pref in trans:
-                    trans[pref].add(suff)
-                else:
-                    trans[pref] = {suff}
-
-        transitionsByK[k] = trans
-    return transitionsByK
-
-def findMAWS(transitions_by_k, kmersByK, kmax):
-    maws = {}
-    
-    # k = 1
-    maws[1] = set(BASES) - kmersByK[1]
-
-    # k = 2
-    for k in range(2, kmax + 1):
-        trans = transitions_by_k[k]
-        kmersPresent = kmersByK[k]
-        kmersPrev = kmersByK[k-1]
-
-        mawK = set()
-
-        for pref in kmersPrev:
+        kmers = list(encodeKmersStream(seq, k))
+        if not kmers:
+            break
+        
+        # Bit array 
+        maxKmer = (1 << (2 * k))
+        useBitarray = len(kmers) > maxKmer / 100
+        
+        if useBitarray:
+            present = bytearray((maxKmer + 7) // 8)
+            for kmer in kmers:
+                present[kmer >> 3] |= (1 << (kmer & 7))
+            
+            def isPresent(x):
+                return present[x >> 3] & (1 << (x & 7))
+        else:
+            present = set(kmers)
+            isPresent = present.__contains__
+        
+        # k = 1
+        if k == 1:
+            maws = []
             for b in BASES:
-                candidate = pref + b
-                suff = candidate[1:]
-
-                if candidate in kmersPresent:
+                if not isPresent(b):
+                    maws.append(decode(b, 1))
+            if maws:
+                yield 1, maws
+            prevPresent = present
+            prevBitArray = useBitarray
+            continue
+        
+        if prevPresent is None:
+            prevPresent = present
+            prevBitArray = useBitarray
+            continue
+        
+        # Vérifie si les k-mers précédents existent
+        if (prevBitArray and all(b == 0 for b in prevPresent)) or (not prevBitArray and not prevPresent):
+            prevPresent = present
+            prevBitArray = useBitarray
+            continue
+        
+        maskSuffix = (1 << (2 * (k - 1))) - 1
+        mawK = set()
+        
+        # Fonction auxiliaire pour vérifier la présence dans l'ensemble précédent
+        if prevBitArray:
+            def isPrevPresent(x):
+                return prevPresent[x >> 3] & (1 << (x & 7))
+        else:
+            isPrevPresent = prevPresent.__contains__
+        
+        if prevBitArray:
+            # Pour un tableau de bits, on itére sur les bits définis
+            maxPrev = (1 << (2 * (k - 1)))
+            prevKmers = []
+            for i in range(maxPrev):
+                if prevPresent[i >> 3] & (1 << (i & 7)):
+                    prev_kmers.append(i)
+        else:
+            prev_kmers = prevPresent
+        
+        for prefix in prev_kmers:
+            for b in BASES:
+                x = (prefix << 2) | b
+                
+                # Condition 1: absent
+                if isPresent(x):
                     continue
-                if suff not in kmersPrev:
-                    continue
-
-                if pref not in trans or suff not in trans[pref]:
-                    mawK.add(candidate)
-
-        maws[k] = mawK
-    return maws
-
-def processSequences(seqs, kmax):
-    results = {}
-
-    for name, seq in seqs:
-        print(f"Traitement de {name} ...")
-
-        rcSeq = degCanonical(seq)
-        kmersByK = precomputeKmers(seq, rcSeq, kmax)
-        transitions = buildTransitions(seq, rcSeq, kmax)
-        results[name] = findMAWS(transitions, kmersByK, kmax)
-
-    return results
-
-
-def writeTSV(results, outFile):
-    with open(outFile, "w") as f:
-        for seqName in sorted(results):
-            for k in sorted(results[seqName]):
-                mawSet = results[seqName][k]
-                if not mawSet:
-                    continue
-                f.write(f"{seqName}\t{k}\t{','.join(sorted(mawSet))}\n")
+                
+                # Condition 2: minimality
+                suffix = x & maskSuffix
+                if isPrevPresent(suffix) or isPrevPresent(rcBin(suffix, k - 1)):
+                    xcanon = min(x, rcBin(x, k))
+                    mawK.add(xcanon)
+        
+        if mawK:
+            yield k, sorted(decode(x, k) for x in mawK)
+        
+        prevPresent = present
+        prevBitArray = useBitarray
 
 def main():
-    parser = argparse.ArgumentParser(description="MAW Detection Program")
+    parser = argparse.ArgumentParser(description="Minimal Absent Words (Program 1)")
     parser.add_argument("fastaFile")
-    parser.add_argument("-k", "--kmax", type=int, required=True)
+    parser.add_argument("-k", type=int, required=True)
+    parser.add_argument("-o", default="resultsProgram1.tsv")
     args = parser.parse_args()
     
     start = time.perf_counter()
     
-    seqs = get_sequences(args.fastaFile)
-    results = processSequences(seqs, kmax=args.kmax)
-    writeTSV(results, "resultsProgram1.tsv")
-    
+    with open(args.o, "w") as out:
+        for name, seq in getSequences(args.fastaFile):
+            print(f"Processing {name} (length: {len(seq)})")
+            
+            for k, maws in findMawsStream(seq, args.k):
+                out.write(f"{name}\t{k}\t{','.join(maws)}\n")
+                out.flush()
+                
     end = time.perf_counter()
-    print(f"Temps total : {end - start:.3f} seconds")
+    print(f"\nTotal time: {end - start:.3f} seconds")
 
 if __name__ == "__main__":
     main()
