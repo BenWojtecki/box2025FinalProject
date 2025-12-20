@@ -6,7 +6,7 @@ import random as rand
 from time import time
 
 class countBF():
-    def __init__(self,k,x,y,eta = 10, threshold = 0):
+    def __init__(self,k,x,y,eta = 8, threshold = 0):
         """
         x,y is the shape of the array
         eta is the number of counters in a single cell

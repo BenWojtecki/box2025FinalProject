@@ -3,9 +3,12 @@ import pandas as pan
 from customCountBF import countBF
 import prime
 from math import log,sqrt,ceil,floor
-from time import perf_counter
+import time
+from rich.progress import Progress
+import argparse
 
-def naive(fileName, kmax, threshold):
+
+def naive(fileName,n, kmax, threshold):
     """
     maws given as a list
     """
@@ -13,16 +16,23 @@ def naive(fileName, kmax, threshold):
     dataframe = pan.read_csv(fileName,delimiter="\t",names = ["k","maws"],usecols=[1,2])
     dataframe.dropna(inplace=True)
     maws = []
-    for t in dataframe.itertuples():
-        k,l = t.k,t.maws 
-        maws[0:0] = t.maws.split(",")
-    mawsDF = pan.DataFrame(Counter(maws).items(),columns=("maw","occ"))
-    #print(mawsDF)
-    data = mawsDF[mawsDF["occ"]>=threshold].sort_values(by=["occ","maw"],ascending=[False,True])
-    for m in data["maw"]:
-        results[len(m)-1].add(m)
-    return results
-def initCountBF(n,threshold,err):
+    with Progress() as p:
+        counting = p.add_task("getting kmers", total=len(dataframe))
+        for t in dataframe.itertuples():
+            p.update(counting,advance = 1)
+            k,l = t.k,t.maws 
+            maws[0:0] = t.maws.split(",")
+        print("counting")
+        mawsDF = pan.DataFrame(Counter(maws).items(),columns=("maw","occ"))
+        #print(mawsDF)
+        print("counting done")
+        data = mawsDF[mawsDF["occ"]>=threshold].sort_values(by=["occ","maw"],ascending=[False,True])
+        outputing = p.add_task("outputing kmers", total = len(data["maws"]))
+        for m in data["maw"]:
+            p.update(outputing,advance = 1)
+            results[len(m)-1].add(m)
+        return results
+def initCountBF(n,threshold,eta,err):
 
     m = ceil(-(n*log(err))/pow(log(2),2))
     k = floor((m/n)*pow(log(2),3))
@@ -31,10 +41,10 @@ def initCountBF(n,threshold,err):
     while prime.prime_numbers[i] <= tmp:
         i+=1
 
-    return countBF(k, prime.prime_numbers[i], prime.prime_numbers[i+3], threshold=threshold)
+    return countBF(k, prime.prime_numbers[i], prime.prime_numbers[i+3],eta, threshold=threshold)
 
-def CountBFromList(maws,n,kmax=1,threshold = 0,err = 0.01):
-    a = initCountBF(n,threshold,err)
+def CountBFromList(maws,n,kmax=1,threshold = 0,eta = 8,err = 0.01):
+    a = initCountBF(n,threshold,eta,err)
     results = [set() for _ in range(kmax)]
     for m in maws:
         if m not in results[0]:
@@ -43,23 +53,26 @@ def CountBFromList(maws,n,kmax=1,threshold = 0,err = 0.01):
                 #print(m,a.query(m))
                 results[0].add(m)
 
-def CountBFFromTSV(fileName,n, kmax, threshold = 0,err = 0.01):
-    a =initCountBF(n,threshold,err)
+def CountBFFromTSV(fileName,n, kmax, threshold = 0,eta = 8,err = 0.01):
+    a =initCountBF(n,threshold,eta,err)
     falsePositives = 0
     results = [set() for _ in range(kmax)]
     dataframe = pan.read_csv(fileName,delimiter="\t",names = ["k","maws"],usecols=[1,2])
     dataframe.dropna(inplace=True)
-    for t in dataframe.itertuples():
-        k,l = t.k,t.maws.split(",")
-        #print(l)
-        for m in l:
-            if m not in results[k-1]:
-                b1,b2 = a.checkinsert(m)
-                if b1 : 
-                    results[k-1].add(m)
-                    #print("===",m,a.query(m))
-                if b2 : 
-                    falsePositives +=1
+    with Progress() as p:
+        counting = p.add_task("Counting kmers", total = n)
+        for t in dataframe.itertuples():
+            k,l = t.k,t.maws.split(",")
+            #print(l)
+            for m in l:
+                p.update(counting,advance = 1)
+                if m not in results[k-1]:
+                    b1,b2 = a.checkinsert(m)
+                    if b1 : 
+                        results[k-1].add(m)
+                        #print("===",m,a.query(m))
+                    if b2 : 
+                        falsePositives +=1
     print(f"FP:{falsePositives}")
     return results
 
@@ -78,17 +91,29 @@ def setListToTSV(outFile,kmax,setlist):
 # n = len(maws)
 # # print(naive(maws,2))
 # a = CountBFromList(maws,n,threshold=4)
+def test_BF():
+    setListToTSV("resultsprogram2.tsv",10,CountBFFromTSV("resultsProgram1.tsv",2106305352,kmax=10,threshold=int(16594*0.3),eta=4,err=0.001))
 
-tmp3 = perf_counter()
-setListToTSV("resultsprogram2.tsv",2,CountBFFromTSV("resultsProgram1.tsv",449,kmax=2,threshold=25,err=0.001))
-tmp4 = perf_counter()
-
-print(tmp4-tmp3)
-
-tmp = perf_counter()
-setListToTSV("resultsprogram2naive.tsv",2,naive("resultsProgram1.tsv",kmax=2,threshold=25))
-tmp2 = perf_counter()
-
-print(tmp2-tmp)
+def test_naive():
+    setListToTSV("resultsprogram2naive.tsv",10,naive("resultsProgram1.tsv",2106305352,kmax=10,threshold=int(16594*0.3)))
 
 
+
+def main():
+    parser = argparse.ArgumentParser(description="Minimal Absent Words (Program 1)")
+    parser.add_argument("-t", type=int, required=True)
+    #parser.add_argument("-o", default="resultsProgram1.tsv")
+    args = parser.parse_args()
+    
+    start = time.perf_counter()
+    
+    if args.t == 0:
+        test_naive()
+    else:
+        test_BF()
+                
+    end = time.perf_counter()
+    print(f"\nTotal time: {end - start:.3f} seconds")
+
+if __name__ == "__main__":
+    main()
