@@ -150,11 +150,12 @@ def main():
     
     start = time.perf_counter()
     totalMaws = 0
-    
+    totalSeqs = 0
+
     with open(args.o, "w") as out:
         for name, seq in getSequences(args.fastaFile):
             print(f"Processing {name} (length: {len(seq)})")
-            
+            totalSeqs +=1
             for k, maws in findMawsStream(seq, args.k):
                 out.write(f"{name}\t{k}\t{','.join(maws)}\n")
                 totalMaws += (len(maws))
@@ -162,6 +163,7 @@ def main():
                 
     end = time.perf_counter()
     print(f"\nTotal number of MAWs: {totalMaws}")
+    print(f"\nTotal number of Sequences: {totalSeqs}")
     print(f"\nTotal time: {end - start:.3f} seconds")
 
 if __name__ == "__main__":

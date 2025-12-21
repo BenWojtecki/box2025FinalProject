@@ -92,10 +92,10 @@ def setListToTSV(outFile,kmax,setlist):
 # # print(naive(maws,2))
 # a = CountBFromList(maws,n,threshold=4)
 def test_BF():
-    setListToTSV("resultsprogram2.tsv",10,CountBFFromTSV("resultsProgram1.tsv",2106305352,kmax=10,threshold=int(16594*0.3),eta=4,err=0.001))
+    setListToTSV("resultsprogram2.tsv",10,CountBFFromTSV("resultsProgram1.tsv",204447422,kmax=10,threshold=int(2826*0.5),eta=5,err=0.001))
 
 def test_naive():
-    setListToTSV("resultsprogram2naive.tsv",10,naive("resultsProgram1.tsv",2106305352,kmax=10,threshold=int(16594*0.3)))
+    setListToTSV("resultsprogram2naive.tsv",10,naive("resultsProgram1.tsv",204447422,kmax=10,threshold=int(2826*0.5)))
 
 
 
