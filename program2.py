@@ -1,119 +1,118 @@
-from collections import Counter
 import pandas as pan
-from customCountBF import countBF
-import prime
-from math import log,sqrt,ceil,floor
-import time
+from bitarray import bitarray
+import queue
 from rich.progress import Progress
-import argparse
+import pygtrie
+from ahocorasick_rs import AhoCorasick, MatchKind
 
+ENC = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+alphabet = "ACGT"
+BASES = range(4)
+complement = str.maketrans("ACGT", "TGCA")
 
-def naive(fileName,n, kmax, threshold):
-    """
-    maws given as a list
-    """
-    results = [set() for _ in range(kmax)]
-    dataframe = pan.read_csv(fileName,delimiter="\t",names = ["k","maws"],usecols=[1,2])
-    dataframe.dropna(inplace=True)
-    maws = []
-    with Progress() as p:
-        counting = p.add_task("getting kmers", total=len(dataframe))
-        for t in dataframe.itertuples():
-            p.update(counting,advance = 1)
-            k,l = t.k,t.maws 
-            maws[0:0] = t.maws.split(",")
-        print("counting")
-        mawsDF = pan.DataFrame(Counter(maws).items(),columns=("maw","occ"))
-        #print(mawsDF)
-        print("counting done")
-        data = mawsDF[mawsDF["occ"]>=threshold].sort_values(by=["occ","maw"],ascending=[False,True])
-        outputing = p.add_task("outputing kmers", total = len(data["maws"]))
-        for m in data["maw"]:
-            p.update(outputing,advance = 1)
-            results[len(m)-1].add(m)
-        return results
-def initCountBF(n,threshold,eta,err):
+# class TrieNode :
+#     __slots__ = ["children","absMap","pAbs", "length"]
+#     def __init__(self, n_seq):
+#         self.children = [None] * 4
+#         self.absMap = bitarray(n_seq)
+#         self.absMap.setall(0)
+#         self.nAbs = 0
+#         self.pAbs  = False
+#         self.length = 0
 
-    m = ceil(-(n*log(err))/pow(log(2),2))
-    k = floor((m/n)*pow(log(2),3))
-    tmp = sqrt(m/256)# From KmerCo
-    i = 0
-    while prime.prime_numbers[i] <= tmp:
-        i+=1
+def get_reverse_complement(seq):
+    return seq.translate(complement)[::-1]
 
-    return countBF(k, prime.prime_numbers[i], prime.prime_numbers[i+3],eta, threshold=threshold)
+def get_canonical(seq):
+    rc = get_reverse_complement(seq)
+    return seq if seq < rc else rc
 
-def CountBFromList(maws,n,kmax=1,threshold = 0,eta = 8,err = 0.01):
-    a = initCountBF(n,threshold,eta,err)
-    results = [set() for _ in range(kmax)]
-    for m in maws:
-        if m not in results[0]:
-            res = a.checkinsert(m)
-            if res[0] :
-                #print(m,a.query(m))
-                results[0].add(m)
+def is_absent_in_seq(word, maw_set):
+    """Checks if 'word' contains any MAW from the sequence's set."""
+    # We check if any m in maw_set is a substring of 'word'
+    for m in maw_set:
+        if m in word:
+            return True
+    return False
 
-def CountBFFromTSV(fileName,n, kmax, threshold = 0,eta = 8,err = 0.01):
-    a =initCountBF(n,threshold,eta,err)
-    falsePositives = 0
-    results = [set() for _ in range(kmax)]
-    dataframe = pan.read_csv(fileName,delimiter="\t",names = ["k","maws"],usecols=[1,2])
-    dataframe.dropna(inplace=True)
-    with Progress() as p:
-        counting = p.add_task("Counting kmers", total = n)
-        for t in dataframe.itertuples():
-            k,l = t.k,t.maws.split(",")
-            #print(l)
-            for m in l:
-                p.update(counting,advance = 1)
-                if m not in results[k-1]:
-                    b1,b2 = a.checkinsert(m)
-                    if b1 : 
-                        results[k-1].add(m)
-                        #print("===",m,a.query(m))
-                    if b2 : 
-                        falsePositives +=1
-    print(f"FP:{falsePositives}")
-    return results
-
-def setListToTSV(outFile,kmax,setlist):
-    with open(outFile, "w") as f:
-        f.write("k\tp-maws\n")
-        for i  in range(kmax):
-            mawSet = sorted(list(setlist[i]))
-            f.write(f"{i+1}\t{','.join(mawSet)}\n")
-
-
-
-#maws = ["a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","a","b","b","b","c","z","z","z","z"]
-# maws = ["a","a","a","a","a","a","a","a","a","b","b","b","c","z","z","z","z"]
-
-# n = len(maws)
-# # print(naive(maws,2))
-# a = CountBFromList(maws,n,threshold=4)
-def test_BF():
-    setListToTSV("resultsprogram2.tsv",10,CountBFFromTSV("resultsProgram1.tsv",204447422,kmax=10,threshold=int(2826*0.5),eta=5,err=0.001))
-
-def test_naive():
-    setListToTSV("resultsprogram2naive.tsv",10,naive("resultsProgram1.tsv",204447422,kmax=10,threshold=int(2826*0.5)))
-
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Minimal Absent Words (Program 1)")
-    parser.add_argument("-t", type=int, required=True)
-    #parser.add_argument("-o", default="resultsProgram1.tsv")
-    args = parser.parse_args()
+def find_pmaws(maw_sets, p, max_k):
+    n = len(maw_sets)
+    threshold = (p * n)
+    print(threshold)
+    all_pmaws = [[]for _ in range(2,max_k)]
     
-    start = time.perf_counter()
-    
-    if args.t == 0:
-        test_naive()
-    else:
-        test_BF()
+    print(f"Building {n} automata...")
+    automata = [AhoCorasick(list(maw_set),matchkind=MatchKind.LeftmostLongest) for maw_set in maw_sets]
+    # Starting with length 2 as per definition |x| > 1
+    # 'active_words' stores words of length k that are NOT p-absent
+    active_candidates = ["AA", "AC", "AG", "AT", "CC", "CG", "CT", "GG", "GT", "TT"] 
+    masks = [bitarray(n)for i in range(n)]
+    for i in range(n):
+        masks[i][i] = 1
+    t = pygtrie.StringTrie()
+
+    for k in range(2, max_k + 1):
+        with Progress() as p:
+            task = p.add_task(f"Checking length {k}, candidates: {len(active_candidates)}",total = len(active_candidates))
+            next_candidates = []
+            
+            for word in active_candidates:
+                p.update(task, advance=1)
+                # Count how many sequences find 'word' absent 
+                # (i.e., 'word' contains one of their MAWs)
+                absence_map = t.longest_prefix(word).value
+
+                if absence_map is None:
+                    absence_map = bitarray(n)
+                    absence_map.setall(0)
+                for i in range(n):
+                    # find_matches_as_indexes returns the first match found
+                    if not absence_map[i]:
+                        ac = automata[i]
+                        subword = ac.find_matches_as_strings(word)
+                        if subword :
+                            sw_absence_map = t.longest_prefix(subword[0]).value
+                            if sw_absence_map is not None:
+                                absence_map|= sw_absence_map
+                            absence_map |= masks[i]
+                t[word] = absence_map
+                if absence_map.count() >= threshold:
+                    # It is p-absent! Since its substrings were not p-absent, 
+                    # this is a Minimal p-Absent Word (pMAW).
+                    all_pmaws[k-2].append(word)
+                else:
+                    # Not p-absent yet. Extend it to k+1 for the next round.
+                    next_candidates.append(word)
+            
+            if not next_candidates:
+                break
                 
-    end = time.perf_counter()
-    print(f"\nTotal time: {end - start:.3f} seconds")
+            # Generate candidates for k+1 by extending only non-p-absent words
+            new_active = set()
+            for word in next_candidates:
+                for char in alphabet:
+                    # We check canonical form here to prune the search space by half
+                    # Note: This requires checking both prefix and suffix extensions
 
-if __name__ == "__main__":
-    main()
+                    new_active.add(get_canonical(word + char))
+                    new_active.add(get_canonical(char + word))
+            
+            active_candidates = list(new_active)
+
+    return all_pmaws
+
+
+# def concatStringList(a,b):
+
+
+def process_data(fp,kmax):
+    print("Processing Data")
+    df = pan.read_csv(fp,sep='\t', names=["name","k","maws"], usecols = [0,1,2])
+    df.dropna(inplace=True)
+    df = df[df['k']<=kmax]
+    df["maws"] = df["maws"].apply(lambda x: x.split(","))
+    df = df.drop("k",axis=1)
+    final = list((df.groupby("name").sum())["maws"])
+    return final
+
+print(find_pmaws(process_data("resultsProgram1.tsv",5),0.4,5))
