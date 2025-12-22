@@ -77,15 +77,8 @@ def findMawsStream(seq, kmax):
         else:
             present = set(kmers)
             isPresent = present.__contains__
-        
-        # k = 1
+
         if k == 1:
-            maws = []
-            for b in BASES:
-                if not isPresent(b):
-                    maws.append(decode(b, 1))
-            if maws:
-                yield 1, maws
             prevPresent = present
             prevBitArray = useBitarray
             continue
