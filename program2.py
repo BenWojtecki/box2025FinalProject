@@ -4,6 +4,22 @@ import queue
 from rich.progress import Progress
 import pygtrie
 from ahocorasick_rs import AhoCorasick, MatchKind
+import argparse
+import time
+import csv
+import sys
+
+maxInt = sys.maxsize
+
+while True:
+    # decrease the maxInt value by factor 10 
+    # as long as the OverflowError occurs.
+
+    try:
+        csv.field_size_limit(maxInt)
+        break
+    except OverflowError:
+        maxInt = int(maxInt/10)
 
 ENC = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
 alphabet = "ACGT"
@@ -35,14 +51,47 @@ def is_absent_in_seq(word, maw_set):
             return True
     return False
 
-def find_pmaws(maw_sets, p, max_k):
-    n = len(maw_sets)
-    threshold = (p * n)
-    print(threshold)
-    all_pmaws = [[]for _ in range(2,max_k)]
+def get_mawsets(tsvfile,kmax):
+    with open(tsvfile,'r') as f:
+        tsv_reader = csv.reader(f, delimiter='\t')
+        buffer = []
+        current_name = None
+
+        for row in tsv_reader:
+            if not row or int(row[1])>kmax:
+                continue  # skip empty rows if desired
+
+            name = row[0]
+
+            if current_name is None:
+                current_name = name
+
+            if name != current_name:
+                # yield the completed group
+                yield buffer
+                buffer = []
+                current_name = name
+
+            buffer[0:0] = row[-1].split(",")
+
+        if buffer:
+            yield buffer
+            
+            
+
+
+def find_pmaws(tsvfile, p, max_k):
     
-    print(f"Building {n} automata...")
-    automata = [AhoCorasick(list(maw_set),matchkind=MatchKind.LeftmostLongest) for maw_set in maw_sets]
+    print(f"Extracting data and building automata...")
+    automata = [AhoCorasick(list(maw_set),matchkind=MatchKind.LeftmostLongest) for maw_set in get_mawsets(tsvfile,max_k)]
+    
+    n = len(automata)
+    threshold = (p * n)
+    print(n)
+    print(f"Finding {p}-MAWs from {tsvfile}")
+    all_pmaws = [[]for _ in range(2,max_k+1)]
+
+    
     # Starting with length 2 as per definition |x| > 1
     # 'active_words' stores words of length k that are NOT p-absent
     active_candidates = ["AA", "AC", "AG", "AT", "CC", "CG", "CT", "GG", "GT", "TT"] 
@@ -58,15 +107,13 @@ def find_pmaws(maw_sets, p, max_k):
             
             for word in active_candidates:
                 p.update(task, advance=1)
-                # Count how many sequences find 'word' absent 
-                # (i.e., 'word' contains one of their MAWs)
+
                 absence_map = t.longest_prefix(word).value
 
                 if absence_map is None:
                     absence_map = bitarray(n)
                     absence_map.setall(0)
                 for i in range(n):
-                    # find_matches_as_indexes returns the first match found
                     if not absence_map[i]:
                         ac = automata[i]
                         subword = ac.find_matches_as_strings(word)
@@ -78,7 +125,7 @@ def find_pmaws(maw_sets, p, max_k):
                 t[word] = absence_map
                 if absence_map.count() >= threshold:
                     # It is p-absent! Since its substrings were not p-absent, 
-                    # this is a Minimal p-Absent Word (pMAW).
+                    # this is a pMAW.
                     all_pmaws[k-2].append(word)
                 else:
                     # Not p-absent yet. Extend it to k+1 for the next round.
@@ -105,14 +152,46 @@ def find_pmaws(maw_sets, p, max_k):
 # def concatStringList(a,b):
 
 
-def process_data(fp,kmax):
-    print("Processing Data")
-    df = pan.read_csv(fp,sep='\t', names=["name","k","maws"], usecols = [0,1,2])
-    df.dropna(inplace=True)
-    df = df[df['k']<=kmax]
-    df["maws"] = df["maws"].apply(lambda x: x.split(","))
-    df = df.drop("k",axis=1)
-    final = list((df.groupby("name").sum())["maws"])
-    return final
+# def process_data(fp,kmax):
+#     print("Extracting data...")
+    
+#     df = pan.read_csv(fp,sep='\t', names=["name","k","maws"], usecols = [0,1,2])
+#     df.dropna(inplace=True)
+#     df = df[df['k']<=kmax]
+#     df["maws"] = df["maws"].apply(lambda x: x.split(","))
+#     df = df.drop("k",axis=1)
+#     final = list((df.groupby("name").sum())["maws"])
+#     print("done.\n")
+#     return final
 
-print(find_pmaws(process_data("resultsProgram1.tsv",5),0.4,5))
+def setListToTSV(outFile,kmax,setlist):
+    print(f"\nWriting results in: {outFile} ...")
+    with open(outFile, "w") as f:
+        f.write("k\tp-maws\n")
+        for i  in range(2,kmax+1):
+            mawSet = sorted(list(setlist[i-2]))
+            f.write(f"{i}\t{','.join(mawSet)}\n")
+    print("done.\n")
+
+def main():
+    parser = argparse.ArgumentParser(description="Minimal Absent Words (Program 1)")
+    parser.add_argument("MawSetTSVFile")
+    parser.add_argument("-k", type=int, required=True)
+    parser.add_argument("-p", type=float, required=True)
+    parser.add_argument("-o", default="resultsProgram2.tsv")
+    args = parser.parse_args()
+    
+    start = time.perf_counter()
+    totalMaws = 0
+    totalSeqs = 0
+    
+    pmaws = find_pmaws(args.MawSetTSVFile,args.p,args.k)
+
+    setListToTSV(args.o,args.k,pmaws)
+                
+    end = time.perf_counter()
+    print(f"\nTotal time: {end - start:.3f} seconds")
+
+if __name__ == "__main__":
+    main()
+
